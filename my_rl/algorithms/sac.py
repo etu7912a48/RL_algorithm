@@ -11,7 +11,7 @@ class CriticNet(tf.keras.Model):
         self.dense2 = tf.keras.layers.Dense(256, activation=tf.keras.activations.relu)
         self.dense3 = tf.keras.layers.Dense(1)
 
-    def call(self, inputs,  training=False):
+    def call(self, inputs):
         concat = self.concat([inputs[0], inputs[1]])
         x = self.dense1(concat)
         x = self.dense2(x)
@@ -33,7 +33,7 @@ class ActorNet(tf.keras.Model):
         self.mean_dense = tf.keras.layers.Dense(self.action_dims)
         self.std_dense = tf.keras.layers.Dense(self.action_dims)
 
-    def call(self, inputs, training=False):
+    def call(self, inputs):
         x = self.dense1(inputs)
         x = self.dense2(x)
         y = self.mean_dense(x)
@@ -56,8 +56,11 @@ class SAC(object):
     TAU = 0.003
     LEARNING_RATE = 3e-4
 
-    def __init__(self, action_dims, critic_net=None, actor_net=None) -> None:
-        self.actor_net = ActorNet(action_dims) if actor_net == None else actor_net
+    def __init__(self, state_space, action_space, critic_net=None, actor_net=None) -> None:
+        self.state_space = state_space
+        self.action_space = action_space
+        # net works
+        self.actor_net = ActorNet(self.action_space) if actor_net == None else actor_net
         self.critic1_net = CriticNet() if critic_net == None else critic_net
         self.critic1_target_net = copy.deepcopy(self.critic1_net)
         self.critic2_net = CriticNet() if critic_net == None else critic_net
@@ -69,18 +72,18 @@ class SAC(object):
 
         # temperature factor
         self.alpha = tf.Variable(0.0, dtype=tf.dtypes.float32)
-        self.h0 = tf.constant(-action_dims, dtype=tf.dtypes.float32)
+        self.h0 = tf.constant(-action_space, dtype=tf.dtypes.float32)
 
     def sample_action(self, state):
         action, _ = self.actor_net.eval(state)
         return action
 
     def learn(self, batches):
-        states = np.array([x[0] for x in batches], dtype=np.float32)
-        actions = np.array([x[1] for x in batches], dtype=np.float32)
-        rewards = np.array([x[2] for x in batches], dtype=np.float32)
-        dones = np.array([x[3] for x in batches], dtype=np.float32)
-        new_states = np.array([x[4] for x in batches], dtype=np.float32)
+        states = batches[:, 0:self.state_space]
+        actions = batches[:, self.state_space:(self.state_space+self.action_space)]
+        rewards = batches[:, (self.state_space+self.action_space):(self.state_space+self.action_space+1)]
+        dones = batches[:, (self.state_space+self.action_space+1):(self.state_space+self.action_space+2)]
+        new_states = batches[:, (self.state_space+self.action_space+2):]
 
         self.calculate_critic_gradient(states, actions, rewards, dones, new_states)
         a_l = self.calculate_actor_gradient(states)
@@ -127,8 +130,7 @@ class SAC(object):
             current_q2_values = self.critic2_net((states, current_actions))
 
             min_current_q_values = tf.minimum(current_q1_values, current_q2_values)
-            soft_q_values = self.alpha*log_prob - min_current_q_values
-            a_l = tf.reduce_mean(soft_q_values)
+            a_l = tf.reduce_mean((self.alpha*log_prob)-min_current_q_values)
         a_grads = tape.gradient(a_l, self.actor_net.trainable_weights)
         self.opt.apply_gradients(zip(a_grads, self.actor_net.trainable_weights))
         return a_l
